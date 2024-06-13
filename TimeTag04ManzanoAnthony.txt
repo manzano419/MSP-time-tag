@@ -1,0 +1,861 @@
+;-------------------------------------------------------------------------------
+; MSP430 Assembler Code Template for use with TI Code Composer Studio
+;
+;-------------------------------------------------------------------------------
+            .cdecls C,LIST,"msp430.h"       ; Include device header file
+
+;-------------------------------------------------------------------------------
+            .def    RESET                   ; Export program entry-point to
+                                            ; make it known to linker.
+;-------------------------------------------------------------------------------
+            .text                           ; Assemble into program memory.
+            .retain                         ; Override ELF conditional linking
+                                            ; and retain current section.
+            .retainrefs                     ; And retain any sections that have
+                                            ; references to current section.
+
+;-------------------------------------------------------------------------------
+
+pos1	.equ	9      ; Aplhanumeric A1 begins at S18
+pos2	.equ	5      ; Aplhanumeric A2 begins at S10
+pos3 	.equ	3      ; Aplhanumeric A3 begins at S6
+pos4 	.equ	18     ; Aplhanumeric A4 begins at S36
+pos5	.equ	14     ; Aplhanumeric A5 begins at S28
+pos6 	.equ	7      ; Aplhanumeric A6 begins at S14
+
+;Define high and low byte values to generate chars for team04 and each team members name
+
+;team04
+teamH	.byte  0x80,0x9F,0xEF,0x6C,0xFC,0x67
+teamL	.byte  0x50,0x00,0x00,0xA0,0x28,0x00
+
+;ANT          A    N    T    H    O    N
+antH	.byte 0xEF,0x6C,0x80,0x6F,0xFC,0x6C
+antL	.byte 0x00,0x82,0x50,0x00,0x00,0x82
+
+;LUI           L    U    I    S
+luiH	.byte 0x1C,0x7C,0x00,0xB7,0x00,0x00
+luiL	.byte 0x00,0x00,0x50,0x00,0x00,0x00
+
+;emm           E    M    M    A     N    U
+emmH	.byte 0x9F,0x6C,0x6C,0xEF,0x6C,0x7C
+emmL	.byte 0x00,0xA0,0xA0,0x00,0x82,0x00
+
+;val           V     A    L    E    R    I
+valH	.byte 0x0C,0xEF,0x1C,0x9F,0xCF,0x00
+valL	.byte 0x28,0x00,0x00,0x00,0x02,0x50
+
+;numberarray	  0	  1	   2	3	 4	  5	   6	7	8	 9
+;used to display numbers in the LCD screen when in countdown mode
+numH	.byte 	0xFC,0x60,0xDB,0xF3,0x67,0xB7,0xBF,0xE0,0xFF,0xE7
+numL	.byte 	0x28,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+
+;digit array contains the values that should be displayed on screen each centisecond. It is updated in countdown mode constantly.
+digitarray	.word	0x0000,0x0000,0x0000,0x0003
+
+timearray	.word	0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000 ;array to store values at n clicks
+int			.word	0		;offset on where to store time at n click in the array
+firstclick	.word	0		;stores value of first pressed of S2
+lastclick	.word	0		;stores value of last press of S2
+countS2		.word	0		;stores how many times S2 has been clicked
+countheart	.word	0		;used to count up to a second to switch the state of the heart in the LCD display
+time		.word	0x0BB8	;the starting time set to 3000 centiseconds, equal to 30 seconds
+quotient	.word	0		; stores the quotient value when dividing
+remainder	.word	0		;stores the remainder value when dividing
+
+
+
+;-----------------------------------------------------------------
+
+RESET       mov.w   #__STACK_END,SP         ; Initialize stackpointer
+StopWDT     mov.w   #WDTPW|WDTHOLD,&WDTCTL  ; Stop watchdog timer
+
+
+;-------------------------------------------------------------------------------
+; Main loop here
+;-------------------------------------------------------------------------------
+
+SetupP1:
+        bic.b   #0xFF,&P1SEL0           ; Set PxSel0 and PxSel1 to digital I/O
+        bic.b   #0xFF,&P1SEL1           ; Digital I/O is the default
+        bic.b   #0xFF,&P9SEL0
+        bic.b   #0xFF,&P9SEL1
+
+        mov.b   #0xF9,&P1DIR       ; Set P1.1 and P1.2 for input and all
+                                        ; other P1 pins for output
+        bis.b   #0xFF,&P9DIR            ; Set all P9 pins for output
+
+        mov.b   #0x06,&P1REN       ; Activate P1.1 and P1.2 programable
+                                        ; pull-up/pull-down resistors
+        bis.b   #0x06,&P1OUT       ; Set resistors for P1.1 and P1.2 as
+                                        ; as pull-up
+        bic.b	#0x80, &P9OUT
+
+        bis.b 	#06h,&P1IES			;int in high to low transition
+        bis.b	#06h,&P1IE			;enable interrupt
+
+
+
+
+		;Initialize LCD segments 0 - 21; 26 - 43
+		MOV.W   #0xFFFF,&LCDCPCTL0
+		MOV.W   #0xfc3f,&LCDCPCTL1
+  		MOV.W   #0x0fff,&LCDCPCTL2
+
+UnlockGPIO  bic.w   #LOCKLPM5,&PM5CTL0      ; Disable the GPIO power-on default
+                                            ; high-impedance mode to activate
+                                            ; previously configured port settings
+
+			;Initialize LCD_C
+  		    ;ACLK, Divider = 1, Pre-divider = 16; 4-pin MUX
+			MOV.W   #0x041e,&LCDCCTL0
+
+  		    ;VLCD generated internally,
+  		    ;V2-V4 generated internally, v5 to ground
+  		    ;Set VLCD voltage to 2.60v
+  		    ;Enable charge pump and select internal reference for it
+  		    MOV.W   #0x0208,&LCDCVCTL
+
+			MOV.W   #0x8000,&LCDCCPCTL   ;Clock synchronization enabled
+
+			MOV.W   #2,&LCDCMEMCTL       ;Clear LCD memory
+
+			;Turn LCD on
+			BIS.W   #1,&LCDCCTL0
+
+			bic.b	#06h,&P1IFG  ; clear flags before setting up msp program to clear any previous interruptions
+
+			nop
+
+			call #initialsetup
+
+			nop				;setup intial LCD display presenting team04 and setting R6 to contain a #1 to indicate we arein the initial state
+
+			bis     #GIE+LPM0, SR 		; enable interrupts and set CPU to low power mode
+
+			nop
+
+			JMP $
+
+
+;Author: Anthony Manzano
+;Fecha: 19/abril/2024
+;objetivo: presentar el nombre del equipo en el LCD al iniciar el MSP
+;precondiciones: No hay nada en el LCD
+;postcondiciones: Se presenta el nombre del equipo en el LCD
+initialsetup:
+			mov #1, R6					; R6 is going to function as a state value for a state machine in the MSP430
+			mov.w	#2,&LCDCMEMCTL 		; clear LCD display
+			MOV.B   #pos1,R14			; sets constant to use as a displacement for lcd location
+			MOV.B	#0,R5				; sets displacement for name char
+  		    MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B	#1,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B	#2,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B	#3,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B	#4,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B	#5,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+	        ret
+
+
+		;delay for debouncing, it is equal to 5 miliseconds, it will decrement until it reaches 0 and then will return.
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo: Crear un delay para hacer un debounce
+;precondiciones:
+;postcondiciones:
+delay:
+			push R10
+			mov #5000, R10
+next: 		dec R10
+			cmp #0,R10
+			jnz next
+			pop R10
+			ret
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo:		update el display a escribir el nombre del equipo
+;precondiciones:	esta en el estado final de diff o en el ultimo nombre del equipo
+;postcondiciones:	escribe el nombre del equipo en el lcd y mueve el valor del proximo estado a R6
+team04:
+			call	#increasecount
+			MOV.B   #pos1,R14
+			MOV.B	#0,R5
+  		    MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B	#1,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B	#2,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B	#3,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B	#4,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B	#5,R5
+			MOV.B   teamH(R5),0x0a20(R14)
+	        MOV.B   teamL(R5),0x0a20+1(R14)
+	        jmp 	falsealarm
+
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo:  escribir el nombre del primer miembro en el lcd
+;precondiciones:   esta el nombre del equipo en el lcd y el estado de R6 es 1
+;postcondiciones:	escribe Anthon y incremeenta el valor de R6 para el proximo estado
+primero:
+			call	#increasecount			;increases the value of the state register
+    		MOV.B   #pos1,R14
+			MOV.B	#0,R5
+  		    MOV.B   antH(R5),0x0a20(R14)
+	        MOV.B   antL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B	#1,R5
+			MOV.B   antH(R5),0x0a20(R14)
+	        MOV.B   antL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B	#2,R5
+			MOV.B   antH(R5),0x0a20(R14)
+	        MOV.B   antL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B	#3,R5
+			MOV.B   antH(R5),0x0a20(R14)
+	        MOV.B   antL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B	#4,R5
+			MOV.B   antH(R5),0x0a20(R14)
+	        MOV.B   antL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B	#5,R5
+			MOV.B   antH(R5),0x0a20(R14)
+	        MOV.B   antL(R5),0x0a20+1(R14)
+	        jmp 	falsealarm
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo:		escribir el nombre de el segundo integrante
+;precondiciones:	esta anthon escrito en la panatalla y r6 contiene un 2
+;postcondiciones:     incrementa r6 y escribe luis en la pantalla
+segundo:
+			call	#increasecount
+	        MOV.B   #pos1,R14
+			MOV.B	#0,R5
+  		    MOV.B   luiH(R5),0x0a20(R14)
+	        MOV.B   luiL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B	#1,R5
+			MOV.B   luiH(R5),0x0a20(R14)
+	        MOV.B   luiL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B	#2,R5
+			MOV.B   luiH(R5),0x0a20(R14)
+	        MOV.B   luiL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B	#3,R5
+			MOV.B   luiH(R5),0x0a20(R14)
+	        MOV.B   luiL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B	#4,R5
+			MOV.B   luiH(R5),0x0a20(R14)
+	        MOV.B   luiL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B	#5,R5
+			MOV.B   luiH(R5),0x0a20(R14)
+	        MOV.B   luiL(R5),0x0a20+1(R14)
+	        jmp 	falsealarm
+
+
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo: escribir el nombre del tercer integrante
+;precondiciones: esta luis en la pantalla y r6 esta en 3
+;postcondiciones:	 incrementa r6 y escribe valeri en la pantala
+tercero:
+			call	#increasecount
+	        MOV.B   #pos1,R14
+			MOV.B	#0,R5
+  		    MOV.B   valH(R5),0x0a20(R14)
+	        MOV.B   valL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B	#1,R5
+			MOV.B   valH(R5),0x0a20(R14)
+	        MOV.B   valL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B	#2,R5
+			MOV.B   valH(R5),0x0a20(R14)
+	        MOV.B   valL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B	#3,R5
+			MOV.B   valH(R5),0x0a20(R14)
+	        MOV.B   valL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B	#4,R5
+			MOV.B   valH(R5),0x0a20(R14)
+	        MOV.B   valL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B	#5,R5
+			MOV.B   valH(R5),0x0a20(R14)
+	        MOV.B   valL(R5),0x0a20+1(R14)
+	        jmp 	falsealarm
+
+
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo: escribir el nombre del cuarto integrante en la pantalla
+;precondiciones: hay un 3 en r6 y esta valerie escrito en el lcd
+;postcondiciones:	borra el valor de r6 para volver al primer estado y escribe emmanu en la pantalla
+cuarto:
+			clr		R6
+	        MOV.B   #pos1,R14
+			MOV.B	#0,R5
+  		    MOV.B   emmH(R5),0x0a20(R14)
+	        MOV.B   emmL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B	#1,R5
+			MOV.B   emmH(R5),0x0a20(R14)
+	        MOV.B   emmL(R5),0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B	#2,R5
+			MOV.B   emmH(R5),0x0a20(R14)
+	        MOV.B   emmL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B	#3,R5
+			MOV.B   emmH(R5),0x0a20(R14)
+	        MOV.B   emmL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B	#4,R5
+			MOV.B   emmH(R5),0x0a20(R14)
+	        MOV.B   emmL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B	#5,R5
+			MOV.B   emmH(R5),0x0a20(R14)
+	        MOV.B   emmL(R5),0x0a20+1(R14)
+	        jmp 	falsealarm
+
+;Author: Anthony Manzano
+;Fecha: 19/abril/2024
+;objetivo: determinar a que estado se movera el msp dependiendo de el valor en r6
+;precondiciones: el msp esta en low power mode esperando una interrupcion
+;postcondiciones:	el msp le da update al estado, le da update al lcd y variables y vuelve a LPM
+PORT1_ISR:
+			call #delay			; call the debounce
+			bit.b #0x02, &P1IFG ; check if 1.1 was pressed
+			call #delay			; call debounce
+			bit.b #0x02, &P1IN	; check if 1.2 was pressed
+			jnz checkS2			; if true, go to check S2
+			cmp	#6, R6			; compare 6 to the value stored in R6 which functions as our current state in the msp
+			jeq	startwatchmode	;if true, go to the subroutine to start the watch
+			cmp #7, R6			;if true, go to subrountine to switch to click mode state
+			jeq enterclickmode
+			cmp #8, R6
+			jeq displayfirstvalue ;display the value of the first time s2 was pressed
+			cmp #9,R6
+			jeq enterclickmode	;enter click mode after showing the first value, to show the last value CLICKN
+			cmp #0x0A, R6
+			jeq displaysecondvalue	;set state to display the last value stored at CLICKN
+			cmp #0x0B, R6
+			jeq enterdiffmode	;display diff in the LCD to enter difference state
+			cmp #0x0C, R6
+			jeq showdiff		;show the difference between first button press and last button press
+			jne displaynames	; if none of the previous state # stored in R6 is true, asssume the MSP is displaying names of team members in alphabetical order
+			jmp falsealarm		;exit ISR
+
+;Author: Anthony Manzano
+;Fecha: 19/abril/2024
+;objetivo: realizar las llamadas cada centisegundo y verificar silas condiciones de la subrutinas se cumplen
+;precondiciones:  el msp esta en modo de stopwatch y se le dio enable a las interrupciones del TA0CCR0
+;postcondiciones: llama a las subrutinas hasta que el stopwatch llegue a 0 y se queda en el estado 00:00
+TIMER_A0_ISR:
+			call #decrement		; calls subroutine to decrement time variable
+			call #extractdigits	; calls subroutine to divide the time value and obtain each number to display in LCD
+			call #updatedisplay ;subroutine to display numbers in the LCD
+			call #flipheartstate ;subrouting to flip heart adress each second that has passed
+			call #checkif0		; check if the time value is 0 to end counter state
+			reti
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: extraer los digitos de el valor de time, para poder enseñarlos en el lcd
+;precondiciones:	el digit array contiene los valores del tiempo anterior
+;postcondiciones:	el digit array contiene los valores del tiempo actual
+extractdigits:
+			mov time, R14		; move the current time value to the value register
+			call #division		; divide by 10
+			mov  remainder, R12	; move the remainder to the corresponding position in the digit array to display
+			mov R12, digitarray
+
+			mov quotient, R14	;move the quotient from the previous division to the value register
+			call #division		; divide by 10, and repeat this process until getting all the values
+			mov remainder, R12
+			mov R12, digitarray+2
+
+			mov quotient, R14
+			call #division
+			mov remainder, R12
+			mov R12, digitarray+4
+
+			mov quotient, R14
+			call #division
+			mov remainder, R12
+			mov R12, digitarray+6
+			ret
+
+
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo:   dividir el tiempo por 10 para extraer el remainder
+;precondiciones:	se le pasa el valor del tiempo en ese momento
+;postcondiciones:	genera un cociente nuevo y se guarda el valor de el remainder en la varible y del quotient
+
+; R11 quotient, R12 remainder, R13 divisor, R14 value
+division:
+			clr R11		;quotient
+			clr R12 	;remainder
+			mov #10, R13
+repeat:
+			cmp.w R13, R14 	; comp divisor with the value
+			jl finished		;if less, jmp to finished
+			sub.w R13, R14	;subtract 10 from value
+			inc.w R11		;increse quotient
+			jmp repeat		;repeat sub
+finished:
+			mov R14, remainder	; mov digit to remainder
+			mov R11, quotient	;move the quotient from the register
+			ret				; exit loop
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: decrementar el valor de el tiempo por 0.01 o 1 centisegundo
+;precondiciones:	el valor de la variable time contiene el valor de hace 0.01 segundos
+;postcondiciones:	se decrementa 1 y contiente el valor de el tiempo actual
+decrement:
+			dec	 time			; decrement the time variable to display by centiseconds
+			ret
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo:	verificar si ha pasado un segundo en el conteo de el tiempo para invertir el estado del lcd del corazon
+;precondiciones:	el contador esta en 0 y el estado del corazon esta apagado
+;postcondiciones:	invierte el estado del corazon basado en si el contador llega a 100 y una vez termine vuelve a conatr desde 0
+flipheartstate:
+			inc countheart			; increment centisecond count for the heart (100 centiseconds = 1 second )
+			cmp #100, countheart		; if a second has passed, jump to flip the state
+			jeq flip
+			ret							;if not 100 centiseconds, return from the subroutine
+flip		xor.b #0x04, &0x0A22		; flip the state of the heart bit
+			mov #0, countheart
+			ret							;return from the subroutine
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: 	invierte el estado del LED verde basado en el status de boton s2
+;precondiciones:	el led se encuentra en el estado opuesto al que va a cambiar
+;postcondiciones:	se invierte el estado del led verde
+invertledstate:
+			xor.b #0x80, &P9OUT		; do an xor operation to invert the state of P9.7
+			call #buttoncount		; calls the function to store values and keep track of clicks
+			jmp falsealarm			; exit isr
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo:	update el lcd al nombre correspondiente basado en el estado
+;precondiciones:	se encuentra mostrando el nombre de el valor que estaba anteriormente en R6
+;postcondiciones:	va a la subrutina para cambiar el nombre de el lcd al correpondiente y muestra el nombre nuevo
+displaynames:
+			cmp #0, R6					; check the value of the register with the state value to show the corresponding name
+			jeq	team04
+			cmp #1, R6
+			jeq primero
+			cmp #2, R6
+			jeq segundo
+			cmp #3, R6
+			jeq tercero
+			cmp #4, R6
+			jeq cuarto
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo:  set el msp para el proximo estado
+;precondiciones: contiene el valor de el estado actual r6
+;postcondiciones: contiene el valor para el proximo estado r6
+increasecount:
+			add #1, R6		;increase the value of the state register
+			ret
+
+;Author: Anthony Manzano
+;Fecha: 19/abril/2024
+;objetivo:	verificar si se presiono s2 e ir al estado correspondiente
+;precondiciones: esta en el estado de los nombres el lcd
+;postcondiciones:	si no cumple con las condiciones no hace nada, si cumple, realiza la subrutina
+checkS2:
+			bit.b #0x04, &P1IFG		; check if the flag is up
+			call #delay				; call the debounce
+			bit.b #0x04, &P1IN		; check if 1.2 input is 0, meaning that S2 was pressed
+			jnz falsealarm			; if not true, exit ISR
+			cmp #1, R6				; check the state, if its in team04, go to setup the timer
+			jeq displaytimer
+			cmp #6, R6				; if its in timer state, invert led output on P9.7
+			jeq invertledstate
+
+;----------------------------------------------------------------------------------------------------------------
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: cambiar el estado del msp a enseñar los 30:00 en el lcd
+;precondiciones:  muestra team 04 en el lcd
+;postcondiciones:	muestra 30:00 en el lcd y le hace reset a las variables y registros para utiizarse en este modo
+displaytimer:				;subroutine to change the state from displaying names to displaying the counter
+			cmp 	#1, R6	;check if the display is in team04
+			jne 	falsealarm	;leave ISR if not true
+			mov		#6, R6  ; set state to watch state
+			mov.w	#2,&LCDCMEMCTL	;clear LCD display
+			call	#setuptimer		;setup the msp timer interrupts
+			mov 	#0, digitarray	; move 30:00 to the digit array to display
+			mov		#0, digitarray+2
+			mov		#0, digitarray+4
+			mov		#3, digitarray+6
+			call	#updatedisplay	;call the function to update the display for the timer
+			jmp 	falsealarm		; exit ISR
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo:  mostrar en el lcd el valor de el timer acual
+;precondiciones:  esta mostrando los valores que contenia el digitarray anteriormente
+;postcondiciones: toma los valores nuevos del digit array y los muestra en el lcd
+updatedisplay:						; subroutine to update the display to the current counter value
+			MOV.B   #pos1,R14
+			MOV.B   #0x00,0x0a20(R14)		; on position A1 and A2 turn off all segments
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B   #0x00,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B	digitarray+6,R5		;move the digit calculated to display to the register
+			MOV.B   numH(R5),0x0a20(R14)	;use the calculated digit as an offset for the array containing the values for the digits to display in the LCD
+	        MOV.B   numL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B	digitarray+4,R5			; repeats previous process for all 4 digits
+			MOV.B   numH(R5),0x0a20(R14)
+	        MOV.B   numL(R5),0x0a20+1(R14)
+	        bis.b 	#0x04, 0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B 	digitarray+2,R5
+			MOV.B   numH(R5),0x0a20(R14)
+	        MOV.B   numL(R5),0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B	digitarray,R5
+			MOV.B   numH(R5),0x0a20(R14)
+	        MOV.B   numL(R5),0x0a20+1(R14)
+	        ret
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: mostrar la cantidad de clicks que se realizaron
+;precondiciones: el msp acaba de terminar de contar o esta mostrando el valor del primer click
+;postcondiciones: muestra la palabra click con un 1 o n clicks
+displayclicks:						;subroutine to display the click 1 and click n
+			cmp #7, R6
+			jne secondtime		; check if its the second time it enter click mode based on the state of R6, if true, jump to display n clicks, else display 1.
+			mov	#1, R5
+			jmp displayn
+
+secondtime	mov countS2, R5
+
+displayn	MOV.B   #pos1,R14				;values to display CLICK in the LCD
+			MOV.B   #0x9C,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B   #0x1C,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B   #0x90,0x0a20(R14)
+	        MOV.B   #0x50,0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B   #0x9C,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B   #0x0E,0x0a20(R14)
+	        MOV.B   #0x22,0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B   numH(R5),0x0a20(R14)		;gets the number stored in R5 to used as an offset to get the high and low bytes of the digit array
+	        MOV.B   numL(R5),0x0a20+1(R14)
+	        ret
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: llama a la funcion para enseñar los clicks en la pantalla
+;precondiciones:  el msp se encuentra en el estado anterior
+;postcondiciones: llama a la subrutina y muestra click en la pantalla e incrementa r6 para el proximo estado
+enterclickmode:
+			call #displayclicks		;sets lcd to display click on the lcd
+			inc	R6					;increments R6 to enter next state
+			jmp falsealarm			;exit ISR
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo:  enseñar el valor que se guardo cuando se realizo el primer click en la pantalla
+;precondiciones: en el lcd aparece click1
+;postcondiciones: en el lcd aparece el valor de cuando se presiono s2 por primera vez
+displayfirstvalue:
+			mov firstclick, R14		;move the value of the counter when s1 was pressed for the first time
+			mov R14, time			; move it to the time variable, this is so we can use the extractdigits subroutine
+			call #extractdigits		; extract the numbers to display
+			call #updatedisplay		; display the numbers on the lcd
+			inc R6					; inc R6 to go to next state
+			jmp falsealarm			; exit ISR
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: enseñar el valor que habia en el tiempo cuando se preciono por ultima vez s2
+;precondiciones: esta enseñando click n el lcd
+;postcondiciones: se presenta el valor de lastclick en el lcd y se aumenta r6
+displaysecondvalue:
+			mov lastclick, R14		;move the value of the counter when s1 was pressed for the first time
+			mov R14, time			; repeats the process of displayfirstvalue
+			call #extractdigits
+			call #updatedisplay
+			inc R6
+			jmp falsealarm
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: enseñar la palabra diff en el lcd
+;precondiciones: se muestra el ultimo valor de clickn en la pantalla
+;postcondiciones: se muestra la palabra diff en la pantalla y se aumenta r6
+enterdiffmode:
+			call #displaydiff		; calls subroutine to set the display to show DIFF
+			inc R6					; increment state value
+			jmp falsealarm			; exit ISR
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: calcular la diferencia entre el primer click y el ultimo click y mostrarla en la pantalla
+;precondiciones: en el lcd se muestra la palabra diff
+;postcondiciones: realiza una resta de el primer valor y el ultimo, y llama a las subrutinas para mostra la differencia en el lcd
+showdiff:
+			mov firstclick, R11		;move the values of the first and last click to R12 and R11 and subtract
+			mov lastclick, R12
+			sub	R12, R11
+			mov R11, time
+			call #extractdigits		; move the value after subtracting to the time variable and extract the numbers to then show on the lcd display
+			call #updatedisplay
+			mov #0, R6
+			jmp falsealarm
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: update el lcd para mostrar la palabra diff
+;precondiciones: el ultimo valor en la pantalla es el de la utlima vez que se presiono s2
+;postcondiciones: mueve los valores correspondiente a diff en la pantalla
+displaydiff:								; sets the lcd to display diff by writing the hex values on the lcd memory
+			MOV.B   #pos1,R14
+			MOV.B   #0x7B,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+			MOV.B   #pos2,R14
+			MOV.B   #0x90,0x0a20(R14)
+	        MOV.B   #0x50,0x0a20+1(R14)
+
+			MOV.B   #pos3,R14
+			MOV.B   #0x8F,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+	        MOV.B   #pos4,R14
+			MOV.B   #0x8F,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+	        MOV.B   #pos5,R14
+			MOV.B   #0x00,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+
+	        MOV.B   #pos6,R14
+			MOV.B   #0x00,0x0a20(R14)
+	        MOV.B   #0x00,0x0a20+1(R14)
+	        ret
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: llama a la subrutina para comenzar el conteo
+;precondiciones: el conteo esta desactivado
+;postcondiciones: el msp comienza a decrementar desde 30:00
+startwatchmode:					;subroutine to start the watch mode on the msp
+	        call	#starttimer
+	        jmp 	falsealarm		;exit ISR
+
+
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: llevar conteo de la cantidad de veces que se ha presionado s2 y guardar los valores
+;precondiciones: countS2 contiene el valor 0 y los clicks no se han guardado
+;postcondiciones: counS2 cuenta hasta 9 clicks y guarda el valor inicial y el ultimo valor en las variable
+buttoncount:
+			inc	 countS2			;increment the count of button clicks if on timer mode
+			cmp #1, countS2			;if its the first time, store the value of the time in the variable savefirstv
+			jeq savefirstv
+			cmp #10, countS2	;if already pressed 9 times, jump to leave routine
+			jeq leaverout
+			mov time, R14			;if its the n time that it has been pressed, save the value to the lastclick
+			mov R14, lastclick
+			;call #addtoarray
+			ret
+
+savefirstv	mov time, R14
+			mov R14, firstclick			;save the value to firstclick variable
+			;call #addtoarray
+			ret
+
+leaverout  	dec countS2		;dec the count from 10 to 9 to always display CLICK9 after the 9th click
+			ret
+
+
+;addtoarray:
+			;cmp #1, countS2
+			;jne	othernum
+			;mov #timearray, R12
+			;mov R12, int
+;othernum	mov time, R11
+			;mov int, R12
+			;mov.w R11, @R12+
+			;add #2, R12
+			;mov R12, int
+			;ret
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo: comenzar a decrementar
+;precondiciones: las interrupciones de el timer estan desactivadas
+;postcondiciones: se activan las interrupciones de el timer
+starttimer:
+			bis.w	#CCIE, &TA0CCTL0		; enable timer interrupts
+			nop
+			ret
+
+;Author: Anthony Manzano
+;Fecha: 19/abril/2024
+;objetivo: preparar el msp para el modo de stopwatch
+;precondiciones:	el msp muestra el nombre de el equipo
+;postcondiciones: se borran los valores de las variables a utilizarse y se ubica el valor correspondiente a 0.01 segundo en TA0CCR0
+setuptimer:
+			mov		#0, R8 ; fucntions as bolean for first press
+			mov 	#0x0BB8, time		;set time to 3000
+			mov		#0, int				;clear the value stored in int
+			mov 	#0, firstclick		;reset first and last click to 0
+			mov		#0, lastclick
+			mov		#0, countS2		;reset count of clicks to 0
+			mov.w	#TASSEL_2+MC_1+ID_3, &TA0CTL		;setup the timer for interrupts
+			mov.w	#1300, &TA0CCR0		;value of cycles before making an interrupt
+			ret
+
+;Author: Anthony Manzano
+;Fecha: 20/abril/2024
+;objetivo:  verificar si ya pasaron 30 seg y perparar el msp para el proximo estado
+;precondiciones:  el msp esta en modo de conteo y las interrupciones de ta0ccr0 estan activadas
+;postcondiciones: desactiva las interrupciones de ta0ccr0 y le hace clear al lcd de el corazon y del led
+checkif0:				;subroutine to set state to finished
+			cmp #0, time	;if time is not 0, leave and make no changes
+			jne false
+			mov #7, R6			; set state to finished state in R6
+			bic.w #CCIE, &TA0CCTL0		;stop timer interrupts
+			nop
+			bic.b #0x80, &P9OUT	;clear led on P9.7
+			nop
+false		ret
+
+;Author: Anthony Manzano
+;Fecha: 18/abril/2024
+;objetivo: salir de los ISR
+;precondiciones: los flags estan arriba y los valores del PC y SR estan guardados en el stack
+;postcondiciones: borra los flags y devuelve el valor del PC y SR a los registros
+falsealarm:
+			bic.b #06h,&P1IFG		;clear interrupt flags after handeling the interrupts
+			nop
+			reti		;return from interrupt
+
+
+
+
+
+;-------------------------------------------------------------------------------
+; Stack Pointer definition
+;-------------------------------------------------------------------------------
+            .global __STACK_END
+            .sect   .stack
+
+;-------------------------------------------------------------------------------
+; Interrupt Vectors
+;-------------------------------------------------------------------------------
+            .sect   ".reset"                ; MSP430 RESET Vector
+            .short  RESET
+            .sect	".int37"
+			.short	PORT1_ISR
+			.sect	".int44"
+			.short	TIMER_A0_ISR
